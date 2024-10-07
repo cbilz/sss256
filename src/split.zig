@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-const common = @import("common.zig");
+const error_handling = @import("error_handling.zig");
 const prelude = @import("prelude.zig");
 const GF256Rijndael = @import("GF256Rijndael.zig");
 
@@ -21,22 +21,22 @@ pub fn main() void {
     assert(threshold >= 2);
     assert(threshold <= shares);
 
-    var error_retaining_writer = common.error_retaining_writer(std.io.getStdErr().writer());
+    var error_retaining_writer = error_handling.error_retaining_writer(std.io.getStdErr().writer());
     const stderr = error_retaining_writer.writer();
 
     stderr.writeAll("Reading secret from stdin...\n") catch {};
-    const secret = readSecret(allocator) catch common.stdin_failed();
+    const secret = readSecret(allocator) catch error_handling.stdin_failed();
 
     if (secret.len == 0) {
         stderr.writeAll("The secret must not be empty.\n") catch {};
-        common.exit(.secret_empty);
+        error_handling.exit(.secret_empty);
     }
 
     // We generate all random coefficients in advance to reduce the potential for security bugs. The
     // downside is a larger memory footprint.
     stderr.writeAll("\nRequesting random coefficients from the operating system...\n") catch {};
     const uv = @mulWithOverflow(secret.len, threshold - 1);
-    if (uv[1] != 0) common.oom();
+    if (uv[1] != 0) error_handling.oom();
     const coefficients = getRandomCoefficients(allocator, uv[0]);
     assert(coefficients.len == uv[0]);
 
@@ -47,9 +47,9 @@ pub fn main() void {
         .{ threshold, shares },
     ) catch {};
 
-    printShares(secret, coefficients, shares) catch common.stdout_failed();
+    printShares(secret, coefficients, shares) catch error_handling.stdout_failed();
 
-    error_retaining_writer.error_union catch common.stderr_failed();
+    error_retaining_writer.error_union catch error_handling.stderr_failed();
 }
 
 /// Only returns an error if reading from standard input failed.
@@ -58,7 +58,7 @@ fn readSecret(allocator: std.mem.Allocator) ![]const u8 {
 
     var secret_list = std.ArrayList(u8).init(allocator);
     secret_list.ensureUnusedCapacity(4096) catch |err| switch (err) {
-        error.OutOfMemory => common.oom(),
+        error.OutOfMemory => error_handling.oom(),
     };
 
     while (true) {
@@ -71,7 +71,7 @@ fn readSecret(allocator: std.mem.Allocator) ![]const u8 {
         }
 
         secret_list.ensureUnusedCapacity(1) catch |err| switch (err) {
-            error.OutOfMemory => common.oom(),
+            error.OutOfMemory => error_handling.oom(),
         };
     }
 }
@@ -80,7 +80,7 @@ fn readSecret(allocator: std.mem.Allocator) ![]const u8 {
 fn getRandomCoefficients(allocator: std.mem.Allocator, len: usize) []const u8 {
     assert(len >= 1);
     const coefficients = allocator.alloc(u8, len) catch |err| switch (err) {
-        error.OutOfMemory => common.oom(),
+        error.OutOfMemory => error_handling.oom(),
     };
     std.crypto.random.bytes(coefficients); // Panics on failure.
     return coefficients;

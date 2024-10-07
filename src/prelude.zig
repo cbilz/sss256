@@ -3,7 +3,7 @@ const debug = std.debug;
 
 const clap = @import("clap");
 
-const common = @import("common.zig");
+const error_handling = @import("error_handling.zig");
 
 pub const Command = enum {
     split,
@@ -51,7 +51,7 @@ pub fn run(allocator: std.mem.Allocator, comptime command: Command) PreludeResul
 
     if (isHelpRequired(allocator)) {
         printHelp(command, &params, exe_arg);
-        common.exit(.ok);
+        error_handling.exit(.ok);
     }
 
     var diag = clap.Diagnostic{};
@@ -72,14 +72,14 @@ pub fn run(allocator: std.mem.Allocator, comptime command: Command) PreludeResul
                         .positional => diag.arg,
                     },
                 });
-                common.exit(.arg_unknown);
+                error_handling.exit(.arg_unknown);
             },
             else => {
                 debug.print(
                     "Unhandled {s} error while parsing command line arguments.\n",
                     .{@errorName(err)},
                 );
-                common.exit(.unknown_clap_error);
+                error_handling.exit(.unknown_clap_error);
             },
         }
         unreachable;
@@ -96,7 +96,7 @@ pub fn run(allocator: std.mem.Allocator, comptime command: Command) PreludeResul
             if (shares < 2) exitArgValueInvalid(command);
             if (threshold > shares) {
                 debug.print("The threshold must not exceed the number of shares.\n", .{});
-                common.exit(.threshold_exceeds_shares);
+                error_handling.exit(.threshold_exceeds_shares);
             }
             break :blk .{ .threshold = threshold, .shares = shares };
         },
@@ -129,7 +129,7 @@ fn printHelp(
     params: []const clap.Param(clap.Help),
     exe_arg: []const u8,
 ) void {
-    var error_retaining_writer = common.error_retaining_writer(std.io.getStdErr().writer());
+    var error_retaining_writer = error_handling.error_retaining_writer(std.io.getStdErr().writer());
     const stderr = error_retaining_writer.writer();
 
     stderr.writeAll("Usage: sss256-" ++ @tagName(command) ++ " ") catch {};
@@ -189,7 +189,7 @@ fn printHelp(
         \\
     }, .{exe_arg}) catch {};
 
-    error_retaining_writer.error_union catch common.stderr_failed();
+    error_retaining_writer.error_union catch error_handling.stderr_failed();
 }
 
 fn exitArgValueInvalid(comptime command: Command) noreturn {
@@ -199,5 +199,5 @@ fn exitArgValueInvalid(comptime command: Command) noreturn {
         .combine => "A number between 2 and 255 must be passed to " ++
             "--threshold (or -t).\n",
     }, .{});
-    common.exit(.arg_value_invalid);
+    error_handling.exit(.arg_value_invalid);
 }

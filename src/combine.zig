@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-const common = @import("common.zig");
+const error_handling = @import("error_handling.zig");
 const prelude = @import("prelude.zig");
 const GF256Rijndael = @import("GF256Rijndael.zig");
 
@@ -14,16 +14,16 @@ pub fn main() void {
     const threshold: u8 = prelude_result.threshold;
     assert(threshold >= 2);
 
-    var error_retaining_writer = common.error_retaining_writer(std.io.getStdErr().writer());
+    var error_retaining_writer = error_handling.error_retaining_writer(std.io.getStdErr().writer());
     const stderr = error_retaining_writer.writer();
 
     stderr.print("Reading {d} shares from stdin...\n", .{threshold}) catch {};
-    const shares = readShares(allocator, stderr, threshold) catch common.stdin_failed();
+    const shares = readShares(allocator, stderr, threshold) catch error_handling.stdin_failed();
 
     stderr.writeAll("Reconstructing secret...\n") catch {};
-    printSecret(shares, threshold) catch common.stdout_failed();
+    printSecret(shares, threshold) catch error_handling.stdout_failed();
 
-    error_retaining_writer.error_union catch common.stderr_failed();
+    error_retaining_writer.error_union catch error_handling.stderr_failed();
 }
 
 /// Only returns an error if reading from standard input failed. Ignores errors returned by
@@ -79,7 +79,7 @@ fn readShares(allocator: std.mem.Allocator, log_writer: anytype, threshold: u8) 
                         log_writer.writeAll(
                             "Share too long. Please reconstruct shorter segments.\n",
                         ) catch {};
-                        common.exit(.share_too_long);
+                        error_handling.exit(.share_too_long);
                     } else {
                         log_writer.writeAll("Expected line feed") catch {};
                     }
@@ -118,7 +118,7 @@ fn readShares(allocator: std.mem.Allocator, log_writer: anytype, threshold: u8) 
                     line + 1,
                     2 * token_index + @intFromBool(token_index <= 1) + byte_index,
                 }) catch {};
-                common.exit(.parse_error);
+                error_handling.exit(.parse_error);
             }
 
             assert(token_index != 1);
@@ -132,7 +132,7 @@ fn readShares(allocator: std.mem.Allocator, log_writer: anytype, threshold: u8) 
                         "Share on line {d} has the invalid index 0x00.\n",
                         .{line + 1},
                     ) catch {};
-                    common.exit(.parse_error);
+                    error_handling.exit(.parse_error);
                 }
                 for (coords.items[0..line], 0..) |index, other_line| {
                     if (coefficient == index) {
@@ -140,14 +140,14 @@ fn readShares(allocator: std.mem.Allocator, log_writer: anytype, threshold: u8) 
                             "Shares on lines {d} and {d} have the same index 0x{x:0<2}.\n",
                             .{ other_line + 1, line + 1, coefficient },
                         ) catch {};
-                        common.exit(.parse_error);
+                        error_handling.exit(.parse_error);
                     }
                 }
             }
 
             if (line == 0) {
                 coords.resize(threshold * @max(1, token_index)) catch |err| switch (err) {
-                    error.OutOfMemory => common.oom(),
+                    error.OutOfMemory => error_handling.oom(),
                 };
             }
 
