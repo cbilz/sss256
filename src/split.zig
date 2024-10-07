@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-const exit = @import("exit.zig");
+const common = @import("common.zig");
 const prelude = @import("prelude.zig");
 const GF256Rijndael = @import("GF256Rijndael.zig");
 
@@ -10,11 +10,6 @@ const GF256Rijndael = @import("GF256Rijndael.zig");
 pub const std_options = .{ .crypto_always_getrandom = true };
 
 pub fn main() void {
-    // TODO: Rework how we handle stderr in the whole codebase. We should not use std.debug.print
-    // because it is unbuffered and fails silently. Instead we should manage a buffer and flush it
-    // at appropriate points. Also, we should think about whether stderr problems are fatal or how
-    // to report them. Stderr failure should perhaps still come with a stderr message.
-
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -26,29 +21,35 @@ pub fn main() void {
     assert(threshold >= 2);
     assert(threshold <= shares);
 
-    std.debug.print("Reading secret from stdin...\n", .{});
-    const secret = readSecret(allocator) catch exit.stdin_failed();
+    var error_retaining_writer = common.error_retaining_writer(std.io.getStdErr().writer());
+    const stderr = error_retaining_writer.writer();
+
+    stderr.writeAll("Reading secret from stdin...\n") catch {};
+    const secret = readSecret(allocator) catch common.stdin_failed();
 
     if (secret.len == 0) {
-        std.debug.print("The secret must not be empty.\n", .{});
-        exit.exit(.secret_empty);
+        stderr.writeAll("The secret must not be empty.\n") catch {};
+        common.exit(.secret_empty);
     }
 
     // We generate all random coefficients in advance to reduce the potential for security bugs. The
     // downside is a larger memory footprint.
+    stderr.writeAll("\nRequesting random coefficients from the operating system...\n") catch {};
     const uv = @mulWithOverflow(secret.len, threshold - 1);
-    if (uv[1] != 0) exit.oom();
+    if (uv[1] != 0) common.oom();
     const coefficients = getRandomCoefficients(allocator, uv[0]);
     assert(coefficients.len == uv[0]);
 
-    // We print a digest of the just obtained coefficients for sanity checking by the human user.
-    printCoefficientDigest(coefficients) catch exit.stderr_failed();
-
-    std.debug.print(
+    // We print a digest of the just obtained coefficients for sanity checking by the user.
+    printCoefficientDigest(stderr, coefficients);
+    stderr.print(
         "Generating shares for a ({d},{d}) threshold scheme...\n",
         .{ threshold, shares },
-    );
-    printShares(secret, coefficients, shares) catch exit.stdout_failed();
+    ) catch {};
+
+    printShares(secret, coefficients, shares) catch common.stdout_failed();
+
+    error_retaining_writer.error_union catch common.stderr_failed();
 }
 
 /// Only returns an error if reading from standard input failed.
@@ -57,7 +58,7 @@ fn readSecret(allocator: std.mem.Allocator) ![]const u8 {
 
     var secret_list = std.ArrayList(u8).init(allocator);
     secret_list.ensureUnusedCapacity(4096) catch |err| switch (err) {
-        error.OutOfMemory => exit.oom(),
+        error.OutOfMemory => common.oom(),
     };
 
     while (true) {
@@ -70,7 +71,7 @@ fn readSecret(allocator: std.mem.Allocator) ![]const u8 {
         }
 
         secret_list.ensureUnusedCapacity(1) catch |err| switch (err) {
-            error.OutOfMemory => exit.oom(),
+            error.OutOfMemory => common.oom(),
         };
     }
 }
@@ -79,26 +80,23 @@ fn readSecret(allocator: std.mem.Allocator) ![]const u8 {
 fn getRandomCoefficients(allocator: std.mem.Allocator, len: usize) []const u8 {
     assert(len >= 1);
     const coefficients = allocator.alloc(u8, len) catch |err| switch (err) {
-        error.OutOfMemory => exit.oom(),
+        error.OutOfMemory => common.oom(),
     };
     std.crypto.random.bytes(coefficients); // Panics on failure.
     return coefficients;
 }
 
-/// Only returns an error if writing to standard error failed.
-fn printCoefficientDigest(coeffs: []const u8) !void {
-    var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
-    const stderr = bw.writer();
-
-    try stderr.writeAll("\nRandom coefficients are ");
+/// Silently ignores write errors. Use an error accumulating writer with this function.
+fn printCoefficientDigest(writer: anytype, coeffs: []const u8) void {
+    writer.writeAll("Random coefficients are ") catch {};
 
     const printed_coeffs = @min(6, coeffs.len);
     for (0..printed_coeffs) |k| {
         if (k == printed_coeffs / 2 and coeffs.len > printed_coeffs) {
-            try stderr.writeAll("..");
+            writer.writeAll("..") catch {};
         }
         const offset = if (k < printed_coeffs / 2) 0 else coeffs.len - printed_coeffs;
-        try printByteHex(stderr, coeffs[offset + k]);
+        printByteHex(writer, coeffs[offset + k]) catch {};
     }
 
     const Int = std.math.IntFittingRange(0, 1024 * std.math.maxInt(usize));
@@ -110,8 +108,10 @@ fn printCoefficientDigest(coeffs: []const u8) !void {
     const numerator = 100 * pop_count + denominator / 2;
     const percent = numerator / denominator;
 
-    try stderr.print(" with a bit average of {d}.{d:0>2}.\n", .{ percent / 100, percent % 100 });
-    try bw.flush();
+    writer.print(
+        " with a bit average of {d}.{d:0>2}.\n",
+        .{ percent / 100, percent % 100 },
+    ) catch {};
 }
 
 /// Only returns an error if writing to standard output failed.

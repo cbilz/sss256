@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-const exit = @import("exit.zig");
+const common = @import("common.zig");
 const prelude = @import("prelude.zig");
 const GF256Rijndael = @import("GF256Rijndael.zig");
 
@@ -14,15 +14,21 @@ pub fn main() void {
     const threshold: u8 = prelude_result.threshold;
     assert(threshold >= 2);
 
-    std.debug.print("Reading {d} shares from stdin...\n", .{threshold});
-    const shares = readShares(allocator, threshold) catch exit.stdin_failed();
+    var error_retaining_writer = common.error_retaining_writer(std.io.getStdErr().writer());
+    const stderr = error_retaining_writer.writer();
 
-    std.debug.print("Reconstructing secret...\n", .{});
-    printSecret(shares, threshold) catch exit.stdout_failed();
+    stderr.print("Reading {d} shares from stdin...\n", .{threshold}) catch {};
+    const shares = readShares(allocator, stderr, threshold) catch common.stdin_failed();
+
+    stderr.writeAll("Reconstructing secret...\n") catch {};
+    printSecret(shares, threshold) catch common.stdout_failed();
+
+    error_retaining_writer.error_union catch common.stderr_failed();
 }
 
-/// Only returns an error if reading from standard input failed.
-fn readShares(allocator: std.mem.Allocator, threshold: u8) ![]const u8 {
+/// Only returns an error if reading from standard input failed. Ignores errors returned by
+/// `log_writer`.
+fn readShares(allocator: std.mem.Allocator, log_writer: anytype, threshold: u8) ![]const u8 {
     var br = std.io.bufferedReader(std.io.getStdIn().reader());
     const stdin = br.reader();
 
@@ -62,7 +68,7 @@ fn readShares(allocator: std.mem.Allocator, threshold: u8) ![]const u8 {
                     if (optional_byte == '-') {
                         continue :token_loop;
                     } else {
-                        std.debug.print("Expected hyphen", .{});
+                        log_writer.writeAll("Expected hyphen") catch {};
                     }
                 } else if (token_index == secret_len + 2) {
                     assert(byte_index == 0);
@@ -70,13 +76,12 @@ fn readShares(allocator: std.mem.Allocator, threshold: u8) ![]const u8 {
                     if (optional_byte == '\n') {
                         break :token_loop;
                     } else if (line == 0) {
-                        std.debug.print(
+                        log_writer.writeAll(
                             "Share too long. Please reconstruct shorter segments.\n",
-                            .{},
-                        );
-                        exit.exit(.share_too_long);
+                        ) catch {};
+                        common.exit(.share_too_long);
                     } else {
-                        std.debug.print("Expected line feed", .{});
+                        log_writer.writeAll("Expected line feed") catch {};
                     }
                 } else if (isHexDigit(optional_byte)) {
                     continue :byte_loop;
@@ -85,9 +90,9 @@ fn readShares(allocator: std.mem.Allocator, threshold: u8) ![]const u8 {
                         secret_len = token_index - 2;
                         break :token_loop;
                     }
-                    std.debug.print("Expected hex digit or line feed", .{});
+                    log_writer.writeAll("Expected hex digit or line feed") catch {};
                 } else {
-                    std.debug.print("Expected hex digit", .{});
+                    log_writer.writeAll("Expected hex digit") catch {};
                 }
 
                 // A parsing error has occured. We now also print a message explaining what the
@@ -95,25 +100,25 @@ fn readShares(allocator: std.mem.Allocator, threshold: u8) ![]const u8 {
 
                 if (optional_byte) |byte| {
                     if (controlCodeAbbreviation(byte)) |abbrev| {
-                        std.debug.print(
+                        log_writer.print(
                             ", but found control code {s} (hex 0x{x:0>2}) ",
                             .{ abbrev, byte },
-                        );
+                        ) catch {};
                     } else if (byte < 0x80) {
                         // The byte is a printable ASCII character.
-                        std.debug.print(", but found '{c}' ", .{byte});
+                        log_writer.print(", but found '{c}' ", .{byte}) catch {};
                     } else {
-                        std.debug.print(", but found non-ASCII byte 0x{x:0<2} ", .{byte});
+                        log_writer.print(", but found non-ASCII byte 0x{x:0<2} ", .{byte}) catch {};
                     }
                 } else {
-                    std.debug.print(", but reached the end of input ", .{});
+                    log_writer.writeAll(", but reached the end of input ") catch {};
                 }
 
-                std.debug.print("on line {d}, column {d}.\n", .{
+                log_writer.print("on line {d}, column {d}.\n", .{
                     line + 1,
                     2 * token_index + @intFromBool(token_index <= 1) + byte_index,
-                });
-                exit.exit(.parse_error);
+                }) catch {};
+                common.exit(.parse_error);
             }
 
             assert(token_index != 1);
@@ -123,23 +128,26 @@ fn readShares(allocator: std.mem.Allocator, threshold: u8) ![]const u8 {
 
             if (token_index == 0) {
                 if (coefficient == 0) {
-                    std.debug.print("Share on line {d} has the invalid index 0x00.\n", .{line + 1});
-                    exit.exit(.parse_error);
+                    log_writer.print(
+                        "Share on line {d} has the invalid index 0x00.\n",
+                        .{line + 1},
+                    ) catch {};
+                    common.exit(.parse_error);
                 }
                 for (coords.items[0..line], 0..) |index, other_line| {
                     if (coefficient == index) {
-                        std.debug.print(
+                        log_writer.print(
                             "Shares on lines {d} and {d} have the same index 0x{x:0<2}.\n",
                             .{ other_line + 1, line + 1, coefficient },
-                        );
-                        exit.exit(.parse_error);
+                        ) catch {};
+                        common.exit(.parse_error);
                     }
                 }
             }
 
             if (line == 0) {
                 coords.resize(threshold * @max(1, token_index)) catch |err| switch (err) {
-                    error.OutOfMemory => exit.oom(),
+                    error.OutOfMemory => common.oom(),
                 };
             }
 

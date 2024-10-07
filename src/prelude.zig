@@ -3,7 +3,7 @@ const debug = std.debug;
 
 const clap = @import("clap");
 
-const exit = @import("exit.zig");
+const common = @import("common.zig");
 
 pub const Command = enum {
     split,
@@ -50,8 +50,8 @@ pub fn run(allocator: std.mem.Allocator, comptime command: Command) PreludeResul
     // not prevent the output of help.
 
     if (isHelpRequired(allocator)) {
-        printHelp(command, &params, exe_arg) catch exit.stderr_failed();
-        exit.exit(.ok);
+        printHelp(command, &params, exe_arg);
+        common.exit(.ok);
     }
 
     var diag = clap.Diagnostic{};
@@ -72,14 +72,14 @@ pub fn run(allocator: std.mem.Allocator, comptime command: Command) PreludeResul
                         .positional => diag.arg,
                     },
                 });
-                exit.exit(.arg_unknown);
+                common.exit(.arg_unknown);
             },
             else => {
                 debug.print(
                     "Unhandled {s} error while parsing command line arguments.\n",
                     .{@errorName(err)},
                 );
-                exit.exit(.unknown_clap_error);
+                common.exit(.unknown_clap_error);
             },
         }
         unreachable;
@@ -96,7 +96,7 @@ pub fn run(allocator: std.mem.Allocator, comptime command: Command) PreludeResul
             if (shares < 2) exitArgValueInvalid(command);
             if (threshold > shares) {
                 debug.print("The threshold must not exceed the number of shares.\n", .{});
-                exit.exit(.threshold_exceeds_shares);
+                common.exit(.threshold_exceeds_shares);
             }
             break :blk .{ .threshold = threshold, .shares = shares };
         },
@@ -123,19 +123,19 @@ fn isHelpRequired(allocator: std.mem.Allocator) bool {
     return no_args;
 }
 
+/// Aborts if writing to standard error failed.
 fn printHelp(
     comptime command: Command,
     params: []const clap.Param(clap.Help),
     exe_arg: []const u8,
-) !void {
-    var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
-    const writer = bw.writer();
+) void {
+    var error_retaining_writer = common.error_retaining_writer(std.io.getStdErr().writer());
+    const stderr = error_retaining_writer.writer();
 
-    try writer.writeAll("Usage: sss256-" ++ @tagName(command) ++ " ");
-    try clap.usage(writer, clap.Help, params);
-    try writer.writeAll("\n\n");
-
-    try writer.writeAll(comptime switch (command) {
+    stderr.writeAll("Usage: sss256-" ++ @tagName(command) ++ " ") catch {};
+    clap.usage(stderr, clap.Help, params) catch {};
+    stderr.writeAll("\n\n") catch {};
+    stderr.writeAll(comptime switch (command) {
         .split =>
         \\Split a secret into multiple shares using Shamir's secret sharing
         \\scheme. Use the sss256-combine tool to reconstruct the secret.
@@ -171,11 +171,9 @@ fn printHelp(
         \\
         \\
         ,
-    });
-
-    try clap.help(writer, clap.Help, params, .{});
-
-    try writer.print(comptime switch (command) {
+    }) catch {};
+    clap.help(stderr, clap.Help, params, .{}) catch {};
+    stderr.print(comptime switch (command) {
         .split =>
         \\
         \\Example:
@@ -189,9 +187,9 @@ fn printHelp(
         \\
         \\    $ {s} --threshold=3
         \\
-    }, .{exe_arg});
+    }, .{exe_arg}) catch {};
 
-    try bw.flush();
+    error_retaining_writer.error_union catch common.stderr_failed();
 }
 
 fn exitArgValueInvalid(comptime command: Command) noreturn {
@@ -201,5 +199,5 @@ fn exitArgValueInvalid(comptime command: Command) noreturn {
         .combine => "A number between 2 and 255 must be passed to " ++
             "--threshold (or -t).\n",
     }, .{});
-    exit.exit(.arg_value_invalid);
+    common.exit(.arg_value_invalid);
 }
