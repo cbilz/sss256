@@ -160,7 +160,7 @@ fn readShares(allocator: std.mem.Allocator, log_writer: anytype, threshold: u8) 
 
 /// Only returns an error if writing to standard output failed.
 fn printSecret(shares: []const u8, threshold: u8) !void {
-    assert(shares.len / 2 >= threshold);
+    assert(shares.len >= @as(usize, 2) * threshold);
     assert(shares.len % threshold == 0);
 
     const indices = shares[0..threshold];

@@ -5,8 +5,8 @@ const common = @import("common.zig");
 const prelude = @import("prelude.zig");
 const GF256Rijndael = @import("GF256Rijndael.zig");
 
-// We only use randomness directly from the operating system. This means any potential issues with
-// Zig's CSPRNG implementations do not affect us.
+/// We only use randomness directly from the operating system. This means any potential issues with
+/// Zig's CSPRNG implementations should not affect us.
 pub const std_options = .{ .crypto_always_getrandom = true };
 
 pub fn main() void {
