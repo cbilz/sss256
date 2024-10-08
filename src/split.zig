@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const std = @import("std");
 const assert = std.debug.assert;
 
@@ -38,7 +39,7 @@ pub fn main() void {
     stderr.writeAll("\nRequesting random coefficients from the operating system...\n") catch {};
     const uv = @mulWithOverflow(secret.len, threshold - 1);
     if (uv[1] != 0) error_handling.oom();
-    const coefficients = getRandomCoefficients(allocator, uv[0]);
+    const coefficients = cryptoSecureRandomnessAlloc(allocator, uv[0]);
     assert(coefficients.len == uv[0]);
 
     // We print a digest of the just obtained coefficients for sanity checking by the user.
@@ -77,14 +78,47 @@ fn readSecret(allocator: std.mem.Allocator, reader: anytype) ![]const u8 {
     }
 }
 
-/// Aborts on failure
-fn getRandomCoefficients(allocator: std.mem.Allocator, len: usize) []const u8 {
+/// Allocates a slice of the specified length and fills it with random bytes obtained from the
+/// operating system's cryptographically secure random number generator. Aborts on failure.
+fn cryptoSecureRandomnessAlloc(allocator: std.mem.Allocator, len: usize) []const u8 {
     assert(len >= 1);
+
     const coefficients = allocator.alloc(u8, len) catch |err| switch (err) {
         error.OutOfMemory => error_handling.oom(),
     };
-    std.crypto.random.bytes(coefficients); // Panics on failure.
-    return coefficients;
+
+    // We fetch all random bytes directly from the operating system. It would be faster to obtain
+    // just 16 or 32 random bytes from the operating system to seed a CSPRNG, but I haven't
+    // thoroughly reviewed the CSPRNGs available in `std.Random` or in packages.
+
+    switch (builtin.os.tag) {
+        .linux => {
+            var buf = coefficients;
+            while (buf.len != 0) {
+                // With a request size of at most 256 bytes, `getrandom` will only return EINTR if
+                // the entropy pool has not been initialized yet.
+                const request_size = @min(256, buf.len);
+                const bytes_read = std.os.linux.getrandom(buf.ptr, request_size, 0);
+                switch (std.os.linux.E.init(bytes_read)) {
+                    .SUCCESS => {
+                        if (bytes_read != request_size) break;
+                        buf = buf[bytes_read..];
+                    },
+                    .INTR => {
+                        std.debug.print(
+                            "Please wait for the system to gather sufficient entropy.\n",
+                            .{},
+                        );
+                        error_handling.exit(.no_entropy);
+                    },
+                    else => break,
+                }
+            } else return coefficients;
+            std.debug.print("The system failed to provide entropy.\n", .{});
+            error_handling.exit(.no_entropy);
+        },
+        else => @compileError("Entropy sourcing not yet implemented for this operating system.\n"),
+    }
 }
 
 /// Silently ignores write errors. Use an error accumulating writer with this function.

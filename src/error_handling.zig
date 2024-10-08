@@ -46,6 +46,7 @@ pub const Status = enum(u8) {
     stdin_failed = 9,
     stdout_failed = 10,
     stderr_failed = 11,
+    no_entropy = 12,
 };
 
 pub fn exit(status: Status) noreturn {
