@@ -25,7 +25,8 @@ pub fn main() void {
     const stderr = error_retaining_writer.writer();
 
     stderr.writeAll("Reading secret from stdin...\n") catch {};
-    const secret = readSecret(allocator) catch error_handling.stdin_failed();
+    const secret = readSecret(allocator, std.io.getStdIn().reader()) catch
+        error_handling.stdin_failed();
 
     if (secret.len == 0) {
         stderr.writeAll("The secret must not be empty.\n") catch {};
@@ -47,15 +48,15 @@ pub fn main() void {
         .{ threshold, shares },
     ) catch {};
 
-    printShares(secret, coefficients, shares) catch error_handling.stdout_failed();
+    var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
+    printShares(bw.writer(), secret, coefficients, shares) catch error_handling.stdout_failed();
+    bw.flush() catch error_handling.stdout_failed();
 
     error_retaining_writer.error_union catch error_handling.stderr_failed();
 }
 
 /// Only returns an error if reading from standard input failed.
-fn readSecret(allocator: std.mem.Allocator) ![]const u8 {
-    const stdin = std.io.getStdIn().reader();
-
+fn readSecret(allocator: std.mem.Allocator, reader: anytype) ![]const u8 {
     var secret_list = std.ArrayList(u8).init(allocator);
     secret_list.ensureUnusedCapacity(4096) catch |err| switch (err) {
         error.OutOfMemory => error_handling.oom(),
@@ -64,7 +65,7 @@ fn readSecret(allocator: std.mem.Allocator) ![]const u8 {
     while (true) {
         const old_len = secret_list.items.len;
         secret_list.expandToCapacity();
-        const bytes_read = try stdin.readAll(secret_list.items[old_len..]);
+        const bytes_read = try reader.readAll(secret_list.items[old_len..]);
 
         if (old_len + bytes_read != secret_list.items.len) {
             return secret_list.items[0 .. old_len + bytes_read];
@@ -115,10 +116,7 @@ fn printCoefficientDigest(writer: anytype, coeffs: []const u8) void {
 }
 
 /// Only returns an error if writing to standard output failed.
-fn printShares(secret: []const u8, coeffs: []const u8, shares: u8) !void {
-    var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
-    const writer = bw.writer();
-
+fn printShares(writer: anytype, secret: []const u8, coeffs: []const u8, shares: u8) !void {
     assert(secret.len >= 1);
     assert(coeffs.len % secret.len == 0);
 
@@ -145,7 +143,6 @@ fn printShares(secret: []const u8, coeffs: []const u8, shares: u8) !void {
         }
         try writer.writeByte('\n');
     }
-    try bw.flush();
 }
 
 fn printByteHex(writer: anytype, byte: u8) !void {

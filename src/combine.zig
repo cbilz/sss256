@@ -18,20 +18,26 @@ pub fn main() void {
     const stderr = error_retaining_writer.writer();
 
     stderr.print("Reading {d} shares from stdin...\n", .{threshold}) catch {};
-    const shares = readShares(allocator, stderr, threshold) catch error_handling.stdin_failed();
+    var br = std.io.bufferedReader(std.io.getStdIn().reader());
+    const shares = readShares(allocator, br.reader(), stderr, threshold) catch
+        error_handling.stdin_failed();
 
     stderr.writeAll("Reconstructing secret...\n") catch {};
-    printSecret(shares, threshold) catch error_handling.stdout_failed();
+    var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
+    printSecret(bw.writer(), shares, threshold) catch error_handling.stdout_failed();
+    bw.flush() catch error_handling.stdout_failed();
 
     error_retaining_writer.error_union catch error_handling.stderr_failed();
 }
 
 /// Only returns an error if reading from standard input failed. Ignores errors returned by
 /// `log_writer`.
-fn readShares(allocator: std.mem.Allocator, log_writer: anytype, threshold: u8) ![]const u8 {
-    var br = std.io.bufferedReader(std.io.getStdIn().reader());
-    const stdin = br.reader();
-
+fn readShares(
+    allocator: std.mem.Allocator,
+    reader: anytype,
+    log_writer: anytype,
+    threshold: u8,
+) ![]const u8 {
     var coords = std.ArrayList(u8).init(allocator);
     var secret_len = @as(usize, std.math.maxInt(usize)) / threshold - 1;
 
@@ -51,7 +57,7 @@ fn readShares(allocator: std.mem.Allocator, log_writer: anytype, threshold: u8) 
             var buf: [2]u8 = undefined;
 
             byte_loop: for (0..2) |byte_index| {
-                const optional_byte: ?u8 = if (stdin.readByte()) |byte| blk: {
+                const optional_byte: ?u8 = if (reader.readByte()) |byte| blk: {
                     buf[byte_index] = byte;
                     break :blk byte;
                 } else |err| switch (err) {
@@ -159,15 +165,12 @@ fn readShares(allocator: std.mem.Allocator, log_writer: anytype, threshold: u8) 
 }
 
 /// Only returns an error if writing to standard output failed.
-fn printSecret(shares: []const u8, threshold: u8) !void {
+fn printSecret(writer: anytype, shares: []const u8, threshold: u8) !void {
     assert(shares.len >= @as(usize, 2) * threshold);
     assert(shares.len % threshold == 0);
 
     const indices = shares[0..threshold];
     const data = shares[threshold..];
-
-    var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
-    const stdout = bw.writer();
 
     for (0..@divExact(data.len, threshold)) |pos| {
         var s = GF256Rijndael{ .int = 0 };
@@ -192,10 +195,8 @@ fn printSecret(shares: []const u8, threshold: u8) !void {
             s = s.add(numerator.mul(denominator.inv()));
         }
 
-        try stdout.writeByte(s.int);
+        try writer.writeByte(s.int);
     }
-
-    try bw.flush();
 }
 
 fn parseByte(buf: []const u8, base: comptime_int) error{ InvalidCharacter, Overflow }!u8 {
