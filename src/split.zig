@@ -123,7 +123,7 @@ fn cryptoSecureRandomnessAlloc(allocator: std.mem.Allocator, len: usize) []const
 
 /// Silently ignores write errors. Use an error accumulating writer with this function.
 fn printCoefficientDigest(writer: anytype, coeffs: []const u8) void {
-    writer.writeAll("Random coefficients are ") catch {};
+    writer.writeAll("Random coefficients are 0x") catch {};
 
     const printed_coeffs = @min(6, coeffs.len);
     for (0..printed_coeffs) |k| {
