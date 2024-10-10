@@ -46,11 +46,11 @@ pub fn main() void {
 
     // We print a digest of the just obtained coefficients for sanity checking by the user.
     printCoefficientDigest(stderr, coefficients);
+
     stderr.print(
         "Generating shares for a ({d},{d}) threshold scheme...\n",
         .{ threshold, shares },
     ) catch {};
-
     var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
     printShares(bw.writer(), secret, coefficients, shares) catch error_handling.stdout_failed();
     bw.flush() catch error_handling.stdout_failed();
@@ -308,7 +308,17 @@ fn printShares(writer: anytype, secret: []const u8, coeffs: []const u8, shares: 
     }
 }
 
-fn testCase(comptime name: [:0]const u8) !void {
+test "printShares.test cases with fixed coefficients" {
+    try testCasePrintSharesFixedCoefficients("translation_2_4");
+    try testCasePrintSharesFixedCoefficients("pure_quadratic_3_5");
+    try testCasePrintSharesFixedCoefficients("random_2_4");
+    try testCasePrintSharesFixedCoefficients("random_3_5");
+    try testCasePrintSharesFixedCoefficients("random_7_9");
+    try testCasePrintSharesFixedCoefficients("random_254_255");
+    try testCasePrintSharesFixedCoefficients("random_255_255");
+}
+
+fn testCasePrintSharesFixedCoefficients(comptime name: [:0]const u8) !void {
     var buf: [16384]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     const writer = fbs.writer();
@@ -321,16 +331,6 @@ fn testCase(comptime name: [:0]const u8) !void {
 
     try printShares(writer, secret, coefficients, shares_count);
     try std.testing.expectEqualStrings(shares, buf[0..fbs.pos]);
-}
-
-test "printShares.test cases with fixed coefficients" {
-    try testCase("translation_2_4");
-    try testCase("pure_quadratic_3_5");
-    try testCase("random_2_4");
-    try testCase("random_3_5");
-    try testCase("random_7_9");
-    try testCase("random_254_255");
-    try testCase("random_255_255");
 }
 
 fn printByteHex(writer: anytype, byte: u8) !void {

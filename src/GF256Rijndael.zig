@@ -26,7 +26,7 @@ pub fn inv(x: GF256Rijndael) GF256Rijndael {
     return exp(255 - log(x));
 }
 
-/// Logarithm with base {3}. The return value is at least 0 and at most 254.
+/// Logarithm with base {3}. The return value is at most 254.
 fn log(x: GF256Rijndael) u8 {
     assert(x.int != 0);
     return logexp_table[x.int];
@@ -53,7 +53,7 @@ const logexp_table: [256 + 509]u8 = blk: {
             res[exponent + 255 + 256] = x_int; // exp(exponent + 255) = .{ .int = x_int }
         }
 
-        // Multiply with x + 1.
+        // Multiply by {3}.
         x_int = x_int ^ (x_int << 1) ^ if (x_int & 0x80 != 0) p else 0;
     }
     assert(x_int == 1);

@@ -48,30 +48,29 @@ fn readShares(
         //   - The first token should be a pair of hexadecimal digits indicating the share index.
         //   - The second token should to be a single hyphen separating index and data.
         //   - One or more pairs of hexadecimal digits should follow. This is the share data. Each
-        //     share should have the same data length, equal to the length of the secret.
+        //     share should have the same number of data digit pairs, equal to the length of the
+        //     secret.
         //   - The last token should be a line feed.
         //
         // The length of the secret is not known until the first line was parsed. This means that we
         // will likely break out of `token_loop` early during the first iteration of `line_loop`.
         token_loop: for (0..secret_len + 3) |token_index| {
-            var buf: [2]u8 = undefined;
+            var coefficient: u8 = 0;
 
             byte_loop: for (0..2) |byte_index| {
-                const optional_byte: ?u8 = if (reader.readByte()) |byte| blk: {
-                    buf[byte_index] = byte;
-                    break :blk byte;
-                } else |err| switch (err) {
+                const byte_optional: ?u8 = reader.readByte() catch |err| switch (err) {
                     error.EndOfStream => null,
                     else => return err,
                 };
 
-                // We break out of this if-else chain if and only if `optional_byte` is valid in
-                // the current context. Otherwise we print message explaining what was expected.
+                // We break out from the following if-else chain if and only if `byte_optional` is
+                // valid in the current context. Otherwise we print a message explaining what was
+                // expected.
 
                 if (token_index == 1) {
                     assert(byte_index == 0);
 
-                    if (optional_byte == '-') {
+                    if (byte_optional == '-') {
                         continue :token_loop;
                     } else {
                         log_writer.writeAll("Expected hyphen") catch {};
@@ -79,7 +78,7 @@ fn readShares(
                 } else if (token_index == secret_len + 2) {
                     assert(byte_index == 0);
 
-                    if (optional_byte == '\n') {
+                    if (byte_optional == '\n') {
                         break :token_loop;
                     } else if (line == 0) {
                         log_writer.writeAll(
@@ -89,10 +88,11 @@ fn readShares(
                     } else {
                         log_writer.writeAll("Expected line feed") catch {};
                     }
-                } else if (isHexDigit(optional_byte)) {
+                } else if (asHexDigit(byte_optional)) |digit| {
+                    coefficient = coefficient * 16 + digit;
                     continue :byte_loop;
                 } else if (line == 0 and token_index >= 3 and byte_index == 0) {
-                    if (optional_byte == '\n') {
+                    if (byte_optional == '\n') {
                         secret_len = token_index - 2;
                         break :token_loop;
                     }
@@ -104,7 +104,7 @@ fn readShares(
                 // A parsing error has occured. We now also print a message explaining what the
                 // invalid input was.
 
-                if (optional_byte) |byte| {
+                if (byte_optional) |byte| {
                     if (controlCodeAbbreviation(byte)) |abbrev| {
                         log_writer.print(
                             ", but found control code {s} (hex 0x{x:0>2}) ",
@@ -129,8 +129,6 @@ fn readShares(
 
             assert(token_index != 1);
             assert(token_index <= secret_len + 1);
-
-            const coefficient = parseByte(&buf, 16) catch unreachable;
 
             if (token_index == 0) {
                 if (coefficient == 0) {
@@ -166,70 +164,43 @@ fn readShares(
 
 /// Only returns an error if writing to standard output failed.
 fn printSecret(writer: anytype, shares: []const u8, threshold: u8) !void {
-    assert(shares.len >= @as(usize, 2) * threshold);
+    assert(shares.len >= 2 * @as(usize, threshold));
     assert(shares.len % threshold == 0);
 
     const indices = shares[0..threshold];
     const data = shares[threshold..];
+    const secret_len = @divExact(data.len, threshold);
 
-    for (0..@divExact(data.len, threshold)) |pos| {
+    for (0..secret_len) |pos| {
         var s = GF256Rijndael{ .int = 0 };
 
         for (indices, data[threshold * pos ..][0..threshold], 0..) |xi_int, yi_int, i| {
             const xi = GF256Rijndael{ .int = xi_int };
             const yi = GF256Rijndael{ .int = yi_int };
 
-            var numerator = yi;
-            var denominator = GF256Rijndael{ .int = 1 };
-
+            var summand = yi;
             for (indices, 0..) |xj_int, j| {
                 if (i == j) continue;
                 const xj = GF256Rijndael{ .int = xj_int };
-                numerator = numerator.mul(xj);
-                denominator = denominator.mul(xj.add(xi));
+                summand = summand.mul(xj).mul(xj.add(xi).inv());
             }
-
-            if (yi.int != 0) assert(numerator.int != 0);
-            assert(denominator.int != 0);
-
-            s = s.add(numerator.mul(denominator.inv()));
+            s = s.add(summand);
+            assert(summand.int != 0 or yi.int == 0);
         }
 
         try writer.writeByte(s.int);
     }
 }
 
-fn parseByte(buf: []const u8, base: comptime_int) error{ InvalidCharacter, Overflow }!u8 {
-    if (base != 10 and base != 16) @compileError("Invalid base.");
-
-    var acc: u32 = 0;
-
-    for (buf) |c| {
-        const digit = switch (c) {
-            '0'...'9' => c - '0',
-            'a'...'f' => if (base == 16) c - 'a' + 10 else break,
-            'A'...'F' => if (base == 16) c - 'A' + 10 else break,
-            else => break,
-        };
-        if (acc <= 0xff) acc = acc * base + digit;
-    } else if (buf.len > 0) {
-        if (acc <= 0xff) {
-            return @intCast(acc);
-        } else {
-            return error.Overflow;
-        }
-    }
-
-    return error.InvalidCharacter;
-}
-
-fn isHexDigit(optional_byte: ?u8) bool {
-    if (optional_byte) |byte| {
+fn asHexDigit(byte_optional: ?u8) ?u4 {
+    if (byte_optional) |byte| {
         return switch (byte) {
-            '0'...'9', 'A'...'F', 'a'...'f' => true,
-            else => false,
+            '0'...'9' => @intCast(byte - '0'),
+            'A'...'F' => @intCast(byte - 'A' + 10),
+            'a'...'f' => @intCast(byte - 'a' + 10),
+            else => null,
         };
-    } else return false;
+    } else return null;
 }
 
 fn controlCodeAbbreviation(byte: u8) ?[:0]const u8 {
