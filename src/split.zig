@@ -34,8 +34,8 @@ pub fn main() void {
         error_handling.exit(.secret_empty);
     }
 
-    // We generate all random coefficients in advance to reduce the potential for security bugs. The
-    // downside is a larger memory footprint.
+    // We generate all random coefficients in advance so that we can print a digest before the
+    // generated shares. The downside is a larger memory footprint.
     stderr.writeAll("\nRequesting random coefficients from the operating system...\n") catch {};
     const uv = @mulWithOverflow(secret.len, threshold - 1);
     if (uv[1] != 0) error_handling.oom();
