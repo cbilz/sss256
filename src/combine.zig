@@ -19,8 +19,12 @@ pub fn main() void {
 
     stderr.print("Reading {d} shares from stdin...\n", .{threshold}) catch {};
     var br = std.io.bufferedReader(std.io.getStdIn().reader());
-    const shares = readShares(allocator, br.reader(), stderr, threshold) catch
-        error_handling.stdin_failed();
+    const shares = readShares(allocator, br.reader(), stderr, threshold) catch |err| switch (err) {
+        error.OutOfMemory => error_handling.oom(),
+        error.ParseError => error_handling.exit(.parse_error),
+        error.ShareTooLong => error_handling.exit(.share_too_long),
+        else => error_handling.stdin_failed(),
+    };
 
     stderr.writeAll("Reconstructing secret...\n") catch {};
     var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
@@ -84,7 +88,7 @@ fn readShares(
                         log_writer.writeAll(
                             "Share too long. Please reconstruct shorter segments.\n",
                         ) catch {};
-                        error_handling.exit(.share_too_long);
+                        return error.ShareTooLong;
                     } else {
                         log_writer.writeAll("Expected line feed") catch {};
                     }
@@ -124,7 +128,7 @@ fn readShares(
                     line + 1,
                     2 * token_index + @intFromBool(token_index <= 1) + byte_index,
                 }) catch {};
-                error_handling.exit(.parse_error);
+                return error.ParseError;
             }
 
             assert(token_index != 1);
@@ -136,7 +140,7 @@ fn readShares(
                         "Share on line {d} has the invalid index 0x00.\n",
                         .{line + 1},
                     ) catch {};
-                    error_handling.exit(.parse_error);
+                    return error.ParseError;
                 }
                 for (coords.items[0..line], 0..) |index, other_line| {
                     if (coefficient == index) {
@@ -144,15 +148,13 @@ fn readShares(
                             "Shares on lines {d} and {d} have the same index 0x{x:0<2}.\n",
                             .{ other_line + 1, line + 1, coefficient },
                         ) catch {};
-                        error_handling.exit(.parse_error);
+                        return error.ParseError;
                     }
                 }
             }
 
             if (line == 0) {
-                coords.resize(threshold * @max(1, token_index)) catch |err| switch (err) {
-                    error.OutOfMemory => error_handling.oom(),
-                };
+                try coords.resize(threshold * @max(1, token_index));
             }
 
             coords.items[threshold * (token_index -| 1) + line] = coefficient;
@@ -160,6 +162,127 @@ fn readShares(
     }
 
     return coords.items;
+}
+
+test "readShares.basic example" {
+    try testCaseReadShares(
+        \\01-000102
+        \\09-102030
+        \\03-112233
+        \\
+    ,
+        &([_]u8{ 0x01, 0x09, 0x03, 0x00, 0x10, 0x11, 0x01, 0x20, 0x22, 0x02, 0x30, 0x33 }),
+        3,
+        "",
+    );
+}
+
+test "readShares.empty input" {
+    const log = "Expected hex digit, but reached the end of input on line 1, column 1.\n";
+    try testCaseReadShares("", error.ParseError, 2, log);
+}
+
+test "readShares.empty data" {
+    const shares =
+        \\01-
+        \\02-
+        \\
+    ;
+    const log = "Expected hex digit, but found control code LF (hex 0x0a) on line 1, column 4.\n";
+    try testCaseReadShares(shares, error.ParseError, 2, log);
+}
+
+test "readShares.invalid index digit" {
+    const shares =
+        \\01-0001
+        \\0x-0010
+        \\
+    ;
+    const log = "Expected hex digit, but found 'x' on line 2, column 2.\n";
+    try testCaseReadShares(shares, error.ParseError, 2, log);
+}
+
+test "readShares.invalid character instead of hyphen" {
+    const shares =
+        \\01x0001
+        \\09-0010
+        \\
+    ;
+    const log = "Expected hyphen, but found 'x' on line 1, column 3.\n";
+    try testCaseReadShares(shares, error.ParseError, 2, log);
+}
+
+test "readShares.invalid data digit (1)" {
+    const shares =
+        \\01-x001
+        \\09-0010
+        \\
+    ;
+    const log = "Expected hex digit, but found 'x' on line 1, column 4.\n";
+    try testCaseReadShares(shares, error.ParseError, 2, log);
+}
+
+test "readShares.invalid data digit (2)" {
+    const shares =
+        \\01-000x
+        \\09-0010
+        \\
+    ;
+    const log = "Expected hex digit, but found 'x' on line 1, column 7.\n";
+    try testCaseReadShares(shares, error.ParseError, 2, log);
+}
+
+test "readShares.invalid character instead of line feed" {
+    const shares =
+        \\01-0001
+        \\09-0010x
+    ;
+    const log = "Expected line feed, but found 'x' on line 2, column 8.\n";
+    try testCaseReadShares(shares, error.ParseError, 2, log);
+}
+
+test "readShares.missing line feed (1)" {
+    const shares =
+        \\01-000109-0010
+    ;
+    const log = "Expected hex digit or line feed, but found '-' on line 1, column 10.\n";
+    try testCaseReadShares(shares, error.ParseError, 2, log);
+}
+
+test "readShares.missing line feed (2)" {
+    const shares =
+        \\01-0001
+        \\09-0010
+    ;
+    const log = "Expected line feed, but reached the end of input on line 2, column 8.\n";
+    try testCaseReadShares(shares, error.ParseError, 2, log);
+}
+
+fn testCaseReadShares(
+    shares_str: []const u8,
+    result: anyerror![]const u8,
+    threshold: u8,
+    log_output: []const u8,
+) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var fbs_shares = std.io.fixedBufferStream(shares_str);
+    var buf_log: [128]u8 = undefined;
+    var fbs_log = std.io.fixedBufferStream(&buf_log);
+
+    const actual = readShares(allocator, fbs_shares.reader(), fbs_log.writer(), threshold);
+    if (result) |shares| {
+        if (actual) |actual_shares| {
+            try std.testing.expectEqualSlices(u8, shares, actual_shares);
+        } else |_| {
+            try std.testing.expect(false);
+        }
+    } else |err| {
+        try std.testing.expectError(err, actual);
+    }
+    try std.testing.expectEqualStrings(log_output, buf_log[0..fbs_log.pos]);
 }
 
 /// Only returns an error if writing to standard output failed.
@@ -189,6 +312,48 @@ fn printSecret(writer: anytype, shares: []const u8, threshold: u8) !void {
         }
 
         try writer.writeByte(s.int);
+    }
+}
+
+test "printSecret.test cases" {
+    try testCasePrintSecret("translation_2_4");
+    try testCasePrintSecret("pure_quadratic_3_5");
+    try testCasePrintSecret("random_2_4");
+    try testCasePrintSecret("random_3_5");
+    try testCasePrintSecret("random_7_9");
+    try testCasePrintSecret("random_254_255");
+    try testCasePrintSecret("random_255_255");
+}
+
+fn testCasePrintSecret(comptime name: [:0]const u8) !void {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const dir = "test_cases/" ++ name ++ "/";
+    const secret = @embedFile(dir ++ "secret");
+    const shares = @embedFile(dir ++ "shares");
+    const threshold = @divExact(@embedFile(dir ++ "coefficients").len, secret.len) + 1;
+    const shares_count = @divExact(shares.len, 2 * secret.len + 4);
+    assert(threshold >= 2 and threshold <= shares_count);
+
+    for (0..shares_count - threshold + 1) |offset| {
+        var fbs_in = std.io.fixedBufferStream(shares[offset * (2 * secret.len + 4) ..]);
+        const reader = fbs_in.reader();
+
+        var buf_out: [16384]u8 = undefined;
+        var fbs_out = std.io.fixedBufferStream(&buf_out);
+        const writer = fbs_out.writer();
+
+        var buf_err: [4096]u8 = undefined;
+        var fbs_err = std.io.fixedBufferStream(&buf_err);
+        const log_writer = fbs_err.writer();
+
+        const shares_parsed = try readShares(allocator, reader, log_writer, threshold);
+        try std.testing.expectEqualStrings("", buf_err[0..fbs_err.pos]);
+
+        try printSecret(writer, shares_parsed, threshold);
+        try std.testing.expectEqualSlices(u8, secret, buf_out[0..fbs_out.pos]);
     }
 }
 
