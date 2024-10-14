@@ -308,6 +308,34 @@ fn printShares(writer: anytype, secret: []const u8, coeffs: []const u8, shares: 
     }
 }
 
+test "printShares.(2,4)-scheme, pure translation" {
+    try testCasePrintSharesFixedCoefficients("translation_2_4");
+}
+
+test "printShares.(3,5)-scheme, pure quadratic" {
+    try testCasePrintSharesFixedCoefficients("pure_quadratic_3_5");
+}
+
+test "printShares.(2,4)-scheme, random coefficients" {
+    try testCasePrintSharesFixedCoefficients("random_2_4");
+}
+
+test "printShares.(3,5)-scheme, random coefficients" {
+    try testCasePrintSharesFixedCoefficients("random_3_5");
+}
+
+test "printShares.(7,9)-scheme, random coefficients" {
+    try testCasePrintSharesFixedCoefficients("random_7_9");
+}
+
+test "printShares.(254,255)-scheme, random coefficients" {
+    try testCasePrintSharesFixedCoefficients("random_254_255");
+}
+
+test "printShares.(255,255)-scheme, random coefficients" {
+    try testCasePrintSharesFixedCoefficients("random_255_255");
+}
+
 test "printShares.test cases with fixed coefficients" {
     try testCasePrintSharesFixedCoefficients("translation_2_4");
     try testCasePrintSharesFixedCoefficients("pure_quadratic_3_5");

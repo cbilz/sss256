@@ -315,13 +315,31 @@ fn printSecret(writer: anytype, shares: []const u8, threshold: u8) !void {
     }
 }
 
-test "printSecret.test cases" {
+test "printSecret.(2,4)-scheme, pure translation" {
     try testCasePrintSecret("translation_2_4");
+}
+
+test "printSecret.(3,5)-scheme, pure quadratic" {
     try testCasePrintSecret("pure_quadratic_3_5");
+}
+
+test "printSecret.(2,4)-scheme, random coefficients" {
     try testCasePrintSecret("random_2_4");
+}
+
+test "printSecret.(3,5)-scheme, random coefficients" {
     try testCasePrintSecret("random_3_5");
+}
+
+test "printSecret.(7,9)-scheme, random coefficients" {
     try testCasePrintSecret("random_7_9");
+}
+
+test "printSecret.(254,255)-scheme, random coefficients" {
     try testCasePrintSecret("random_254_255");
+}
+
+test "printSecret.(255,255)-scheme, random coefficients" {
     try testCasePrintSecret("random_255_255");
 }
 
